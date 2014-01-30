@@ -27,7 +27,7 @@ from Singleton import Singleton
 from ttp import ttp
 import IndentFormatter
 from src.XMPPOTR import pOTRContext
-from src.XMPPOTR.OTRContextManager import pOTRContextManager
+from src.XMPPOTR.OTRContextManager import PyOTRContextManager
 
 
 class ChitterBuffer(metaclass=Singleton):
@@ -241,7 +241,7 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
         #    logging.error('Server is taking too long to respond')
         #    self.disconnect()
 
-        self.otr_manager = pOTRContextManager(self.boundjid.bare)
+        self.otr_manager = PyOTRContextManager(self.boundjid.bare)
 
         # For each user, start a ChitterStream
         conn =  sqlite3.connect('/var/local/chitter.db')

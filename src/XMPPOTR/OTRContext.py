@@ -1,7 +1,7 @@
 __author__ = 'darac'
 
 
-class pOTRContext(potr.context.Context):
+class PyOTRContext(potr.context.Context):
     # https://blog.darmasoft.net/2013/06/30/using-pure-python-otr.html
     def __init__(self, account, peer):
         super().__init__(account, peer)

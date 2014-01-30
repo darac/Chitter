@@ -1,14 +1,14 @@
-from src.XMPPOTR.OTRAccount import pOTRAccount
+from src.XMPPOTR.OTRAccount import PyOTRAccount
 
 __author__ = 'darac'
 
 
-class pOTRContextManager:
+class PyOTRContextManager:
   # the jid parameter is the logged in user's jid.
   # I use it to instantiate an object of the *potr.context.Account*
   # subclass described earlier.
   def __init__(self, jid):
-    self.account = pOTRAccount(jid)
+    self.account = PyOTRAccount(jid)
     self.contexts = {}
 
   # this method starts a context with a peer if none exists,

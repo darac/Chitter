@@ -4,7 +4,7 @@ import os
 __author__ = 'darac'
 
 
-class pOTRAccount(potr.context.Account):
+class PyOTRAccount(potr.context.Account):
 
     def __init__(self, jid):
         super().__init__(jid, 'xmpp', 1024)
