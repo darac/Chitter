@@ -26,8 +26,8 @@ import potr
 from Singleton import Singleton
 from ttp import ttp
 import IndentFormatter
-from src.XMPPOTR import pOTRContext
-from src.XMPPOTR.OTRContextManager import PyOTRContextManager
+from XMPPOTR import OTRContext
+from XMPPOTR.OTRContextManager import PyOTRContextManager
 
 
 class ChitterBuffer(metaclass=Singleton):

@@ -1,4 +1,4 @@
-from src.XMPPOTR.OTRAccount import PyOTRAccount
+from XMPPOTR.OTRAccount import PyOTRAccount
 
 __author__ = 'darac'
 

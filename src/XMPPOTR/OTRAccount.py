@@ -1,6 +1,8 @@
 import logging
 import os
 
+import potr
+
 __author__ = 'darac'
 
 

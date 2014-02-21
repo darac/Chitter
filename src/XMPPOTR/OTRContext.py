@@ -1,5 +1,6 @@
 __author__ = 'darac'
 
+import potr
 
 class PyOTRContext(potr.context.Context):
     # https://blog.darmasoft.net/2013/06/30/using-pure-python-otr.html
