@@ -507,7 +507,7 @@ Commands:
 
 
                     if msg['body'].lower().strip().startswith('/reply'):
-                        cmd_parts = msg['body'].lower().split(maxsplit=2)
+                        cmd_parts = msg['body'].split(maxsplit=2)
                         tweet = ChitterBuffer().get(cmd_parts[1], msg['from'].bare)
                         if tweet is None:
                             msg.reply("Sorry, I don't know message ID %s. (Maybe it's been deleted?)" % cmd_parts[1]).send()
@@ -557,7 +557,7 @@ Commands:
 
 
                     if msg['body'].lower().strip().startswith('/tweet'):
-                        cmd_parts = msg['body'].lower().split(maxsplit=1)
+                        cmd_parts = msg['body'].split(maxsplit=1)
                         if 1 > len(cmd_parts)-1 and self.composed[msg['from'].bare] != "":
                             # No tweet body, but there is a composed
                             # Use that
@@ -587,7 +587,7 @@ Commands:
                             self.send_message(mto=msg['from'], mtype=msg['type'], mbody=e)
 
                     if msg['body'].lower().strip().startswith('/dm'):
-                        cmd_parts = msg['body'].lower().split(maxsplit=2)
+                        cmd_parts = msg['body'].split(maxsplit=2)
                         if 1 > len(cmd_parts)-1:
                             # No options
                             self.send_message(mto=msg['from'], mtype=msg['type'], mbody="You must specify who you want to send the DM to.")
