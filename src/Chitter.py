@@ -8,11 +8,9 @@
 """
 
 # built-ins
-import sys, os
 import argparse
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, timedelta
 import logging
-import pprint
 import sqlite3
 from threading import Thread
 import unicodedata
@@ -28,101 +26,8 @@ import potr
 from Singleton import Singleton
 from ttp import ttp
 import IndentFormatter
-
-
-class pOTRContext(potr.context.Context):
-    # https://blog.darmasoft.net/2013/06/30/using-pure-python-otr.html
-    def __init__(self, account, peer):
-        super().__init__(account, peer)
-        self.DEFAULT_OTR_POLICY = {
-            'ALLOW_V1' : False,
-            'ALLOW_V2' : True,
-            'REQUIRE_ENCRYPTION' : False,
-        }
-        
-    def getPolicy(self, key):
-        if key in self.DEFAULT_OTR_POLICY:
-            return self.DEFAULT_OTR_POLICY[key]
-        else:
-            return False
-
-    def inject(self, msg, appdata=None):
-        log.debug('inject(%s, appdata=%s)' % (msg, appdata))
-        # this method is called when potr needs to inject a message into
-        # the stream.  for instance, upon receiving an initiating stanza,
-        # potr will inject the key exchange messages here is where you
-        # should hook into your app and actually send the message potr gives you
-
-
-class pOTRAccount(potr.context.Account):
-
-    def __init__(self, jid):
-        super().__init__(jid, 'xmpp', 1024)
-        self.jid = jid
-        self.keyFilePath = os.path.join("./otr", jid)
-
-    def load_trusts(self):
-        """ Load trust data from the fingerprint file."""
-        if os.path.exists(self.keyFilePath + '.fpr'):
-            with open(self.keyFilePath + '.fpr') as fpr_file:
-                for line in fpr_file:
-                    logging.debug("Load trust check: {}".format(line))
-                    
-                    context, account, protocol, fpr, trust = \
-                            line[:-1].split('\t')
-
-                    if account == self.jid and protocol == 'xmpp':
-                        logging.debug('Set trust: {}, {}, {}'.format(context, fpr, trust))
-                        self.setTrust(context, fpr, trust)
-
-    def saveTrusts(self):
-        """ Save trusts."""
-        with open(self.keyFilePath + '.fpr') as fpr_file:
-            for uid, trusts in self.trusts.items():
-                for fpr.trust in trusts.items():
-                    logging.debug('Saving Trust: {},{},{},{},{}'.format(uid, self.jid,'xmpp',fpr,trust))
-                    fpr_file.write('\t'.join(uid, self.jid, 'xmpp', fpr, trust))
-                    fpr_file.write('\n')
-
-
-    # this method needs to be overwritten to load the private key
-    # it should return None in the event that no private key is found
-    # returning None will trigger autogenerating a private key in the default implementation
-    def loadPrivkey(self):
-        try:
-            with open(self.keyFilePath + '.key3', 'rb') as keyFile:
-                return potr.crypt.PK.parsePrivateKey(keyFile.read())[0]
-        except IOError as e:
-            pass
-        return None
-
-    # this method needs to be overwritten to save the private key
-    def savePrivkey(self):
-        try:
-            with open(self.keyFilePath + '.key3', 'wb') as keyFile:
-                keyFile.write(self.getPrivkey().serializePrivateKey())
-        except IOError as e:
-          pass
-
-class pOTRContextManager:
-  # the jid parameter is the logged in user's jid.
-  # I use it to instantiate an object of the *potr.context.Account*
-  # subclass described earlier.
-  def __init__(self, jid):
-    self.account = pOTRAccount(jid)
-    self.contexts = {}
-
-  # this method starts a context with a peer if none exists,
-  # or returns it otherwise
-  def start_context(self, other):
-    if other not in self.contexts:
-      self.contexts[other] = pOTRContext(self.account, other)
-    return self.contexts[other]
-
-  # just an alias for start_context
-  def get_context_for_user(self, other):
-    return self.start_context(other)
-
+from src.XMPPOTR import pOTRContext
+from src.XMPPOTR.OTRContextManager import PyOTRContextManager
 
 
 class ChitterBuffer(metaclass=Singleton):
@@ -336,7 +241,7 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
         #    logging.error('Server is taking too long to respond')
         #    self.disconnect()
 
-        self.otr_manager = pOTRContextManager(self.boundjid.bare)
+        self.otr_manager = PyOTRContextManager(self.boundjid.bare)
 
         # For each user, start a ChitterStream
         conn =  sqlite3.connect('/var/local/chitter.db')
@@ -401,7 +306,7 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
             self.send_message(mto=msg['from'], mtype=msg['type'], mbody="WARNING! Plaintext message recieved during OTR session :(")
             encrypted = False
 
-        if encrypted and res[0] != None:
+        if encrypted and res[0] is not None:
             msg['body'] = res[0]
 
         # Pass the decrypted message onwards
@@ -435,7 +340,7 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
             cursor.execute ("SELECT auth_state FROM users WHERE jid=?", (msg['from'].bare,))
             row = cursor.fetchone()
             if row is None:
-                logging.warn("Ack! Don't know the user %s", msg['from'].bare)
+                logging.warning("Ack! Don't know the user %s", msg['from'].bare)
             else:
                 auth_state = row['auth_state']
 
@@ -543,7 +448,7 @@ Commands:
                                             self.streams[msg['from'].bare]['dms'].stream.twitter.update_status(status=reply_body),
                                             is_dm=False)
                             except TwythonError as e:
-                                logging.warn(e)
+                                logging.warning(e)
                                 self.send_message(mto=msg['from'], mtype=msg['type'], mbody=e)
                             else:
                                 self.composed[msg['from'].bare] = ""
@@ -583,7 +488,7 @@ Commands:
                                          'tweet': newtweet['content']},
                                     mtype=msg['type'])
                         except TwythonError as e:
-                            logging.warn(e)
+                            logging.warning(e)
                             self.send_message(mto=msg['from'], mtype=msg['type'], mbody=e)
 
                     if msg['body'].lower().strip().startswith('/dm'):
@@ -623,7 +528,7 @@ Commands:
                                          'tweet': newtweet['content']},
                                     mtype=msg['type'])
                         except TwythonError as e:
-                            logging.warn(e)
+                            logging.warning(e)
                             self.send_message(mto=msg['from'], mtype=msg['type'], mbody=e)
 
 
