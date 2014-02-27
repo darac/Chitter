@@ -1,4 +1,5 @@
 from XMPPOTR.OTRAccount import PyOTRAccount
+from XMPPOTR.OTRContext import PyOTRContext
 
 __author__ = 'darac'
 
@@ -15,7 +16,7 @@ class PyOTRContextManager:
   # or returns it otherwise
   def start_context(self, other):
     if other not in self.contexts:
-      self.contexts[other] = pOTRContext(self.account, other)
+      self.contexts[other] = PyOTRContext(self.account, other)
     return self.contexts[other]
 
   # just an alias for start_context
