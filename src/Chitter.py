@@ -190,7 +190,7 @@ class ChitterStream(TwythonStreamer):
         elif 'text' in data:
             logging.debug("Potential Stalk:")
             if 'in_reply_to_user_id_str' in data:
-                logging.debug("In_Reply_To: %s", data['in_reply_user_id_str'])
+                logging.debug("In_Reply_To: %s", data['in_reply_to_user_id_str'])
             else:
                 logging.debug("Not a reply")
             if 'retweeted_status' in data:
@@ -199,8 +199,10 @@ class ChitterStream(TwythonStreamer):
                 logging.debug("Not a retweet")
             if ('in_reply_to_user_id_str' not in data and \
                 'retweeted_status' not in data) or \
-               data['in_reply_to_user_id_str'] == self.twituser['id_str'] or \
-               data['retweeted_status']['user']['id_str'] == self.twituser['id_str']:
+               ('in_reply_to_user_id_str' in data and \
+                data['in_reply_to_user_id_str'] == self.twituser['id_str']) or \
+               ('retweeted_status' in data and \
+                data['retweeted_status']['user']['id_str'] == self.twituser['id_str']):
                 # * Not a reply -OR-
                 # * Reply to this user -OR-
                 # * Not a retweet -OR-
@@ -220,6 +222,8 @@ class ChitterStream(TwythonStreamer):
                                  'screenname': data['user']['screen_name'],
                                  'tweet': Twython.html_for_tweet(data)},
                             mtype='normal')
+            else:
+                logging.debug("Not a stalk")
         
 
     def on_error(self, status_code, data):
@@ -548,7 +552,7 @@ Commands:<br />
                                             is_dm=False)
                             except TwythonError as e:
                                 logging.warning(e)
-                                self.send_message(mto=msg['from'], mtype=msg['type'], mbody=e)
+                                self.send_message(mto=msg['from'], mtype=msg['type'], mbody=str(e))
                             else:
                                 self.composed[msg['from'].bare] = ""
                                 newtweet = ChitterBuffer().get(msgid, msg['from'].bare)
@@ -559,7 +563,7 @@ Commands:<br />
                                              'tweet': newtweet['content']},
                                         mhtml="<p><tt><b>%(msgid)s</b>&gt; [SENT]</tt>: %(tweet)s</p>" %
                                             {'msgid': msgid,
-                                             'tweet': Twython.html_for_tweet(newtweet)},
+                                             'tweet': newtweet['content']},
                                         mtype=msg['type'])
 
 
@@ -825,6 +829,7 @@ ON new.jid = old.jid
         for presence in self.roster[barejid]['presence']:
             logging.debug("Checking %s presence '%s': %s" % (barejid, presence, self.roster[barejid]['presence'][presence]['show']))
             IsOnline = IsOnline or (self.roster[barejid]['presence'][presence]['show'] != 'offline')
+        logging.debug("Is %s online? %s", barejid, IsOnline)
         return IsOnline
 
     def user_online(self, presence):
