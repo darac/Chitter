@@ -11,10 +11,16 @@
 import argparse
 from datetime import datetime, timedelta
 import logging
+import logging.handlers
 import sqlite3
 from threading import Thread
 import time
 import unicodedata
+import sys
+import platform
+
+if int(platform.python_version_tuple()[0]) < 3:
+    raise Exception
 
 from sleekxmpp import ClientXMPP
 from sleekxmpp.exceptions import XMPPError#, IqError, IqTimeout
@@ -112,7 +118,7 @@ class ChitterThread(Thread):
             conn =  sqlite3.connect('/var/local/chitter.db')
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute ("SELECT want_mentions, want_stalks FROM options WHERE jid=?", (self.stream.jid,))
+            cursor.execute ("SELECT want_mentions, want_stalks, want_events FROM options WHERE jid=?", (self.stream.jid,))
             row = cursor.fetchone()
             if row is None:
                 logging.warning("Ack! Don't know the user %s", self.stream.jid)
@@ -174,19 +180,19 @@ class ChitterStream(TwythonStreamer):
         elif self.kind == 'dms':
             msgid = self.buff.add(self.jid, data['direct_message'], is_dm=True)
             if msgid != "":
-                self.xmpp.send_message(
-                        mto=self.jid,
-                        mbody="%(msgid)s> [DIRECT] %(user_desc)s (@%(screenname)s): %(tweet)s" %
-                            {'msgid': msgid,
-                             'user_desc': data['direct_message']['sender']['name'],
-                             'screenname': data['direct_message']['sender']['screen_name'],
-                             'tweet': data['direct_message']['text']},
-                            mhtml="<p><tt><b>%(msgid)s</b>&gt; [DIRECT] %(user_desc)s (<a href=\"https://twitter.com/%(screenname)s\">@%(screenname)s</a>)</tt>: %(tweet)s</p>" %
-                            {'msgid': msgid,
-                             'user_desc': data['direct_message']['sender']['name'],
-                             'screenname': data['direct_message']['sender']['screen_name'],
-                             'tweet': Twython.html_for_tweet(data['direct_message'])},
-                        mtype='normal')
+                if data['direct_message']['sender']['id_str'] == self.twituser['id_str']:
+                    # This is from me
+                    self.xmpp.send_message(
+                            mto=self.jid,
+                            mbody="{msgid}> [DIRECT TO {dm[recipient][name]} (@{dm[recipient][screen_name]})]: {dm[text]}".format(msgid=msgid, dm=data['direct_message']),
+                            mhtml="<p><tt><b>{msgid}</b>&gt; [DIRECT TO {dm[recipient][name]} (<a href=\"https://twitter.com/{dm[recipient][screen_name]}\">@{dm[recipient][screen_name]}</a>)</tt>: {tweet}</p>".format(msgid=msgid, dm=data['direct_message'], tweet = Twython.html_for_tweet(data['direct_message'])),
+                            mtype='normal')
+                else:
+                    self.xmpp.send_message(
+                            mto=self.jid,
+                            mbody="{msgid}> [DIRECT FROM {dm[sender][name]} (@{dm[sender][screen_name]})]: {dm[text]}".format(msgid=msgid, dm=data['direct_message']),
+                            mhtml="<p><tt><b>{msgid}</b>&gt; [DIRECT FROM {dm[sender][name]} (<a href=\"https://twitter.com/{dm[sender][screen_name]}\">@{dm[sender][screen_name]}</a>)</tt>: {tweet}</p>".format(msgid=msgid, dm=data['direct_message'], tweet = Twython.html_for_tweet(data['direct_message'])),
+                            mtype='normal')
         elif 'text' in data:
             logging.debug("Potential Stalk:")
             if 'in_reply_to_user_id_str' in data:
@@ -224,7 +230,51 @@ class ChitterStream(TwythonStreamer):
                             mtype='normal')
             else:
                 logging.debug("Not a stalk")
-        
+        elif 'event' in data:
+            logging.debug("Event %s from @%s to @%s", data['event'], data['source']['screen_name'], data['target']['screen_name'])
+            conn =  sqlite3.connect('/var/local/chitter.db')
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute ("SELECT want_events FROM options WHERE jid=?", (self.jid,))
+            row = cursor.fetchone()
+            if row is None:
+                logging.warning("Ack! Don't know the user %s", self.jid)
+            elif row['want_events']:
+                outmsg = ""
+                outmsghtml = ""
+                # We're not going to send events where the source is the current user
+                if data['event'] == 'favorite' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just favourited your tweet: {[target_object][text]}.".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just favourited your tweet: ".format(data) + Twython.html_for_tweet(data['target_object']) + "</p>"
+                elif data['event'] == 'unfavorite' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just unfavourited your tweet: {[target_object][text]}.".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just unfavourited your tweet: ".format(data) + Twython.html_for_tweet(data['target_object']) + "</p>"
+                elif data['event'] == 'follow' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just followed you.".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just followed you.</p>"
+                elif data['event'] == 'list_member_added' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just added you to the list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just added you to the list \"{[target_object][name]\" ({[target_object][description]})</p>"
+                elif data['event'] == 'list_member_removed' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just removed you from the list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just removed you from the list \"{[target_object][name]\" ({[target_object][description]})</p>"
+                elif data['event'] == 'list_user_subscribed' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just subscribed to your list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just subscribed to your list \"{[target_object][name]\" ({[target_object][description]})</p>"
+                elif data['event'] == 'list_user_unsubscribed' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just unsubscribed from your list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just unsubscribed from your list \"{[target_object][name]\" ({[target_object][description]})</p>"
+
+                if outmsg != "":
+                    self.xmpp.send_message(
+                            mto=self.jid,
+                            mbody=outmsg,
+                            mhtml=outmsghhtml,
+                            mtype='normal')
+        else:
+            logging.debug("Unknown Streaming message. Keys are %s", ", ".join(data.keys()))
+            
+
 
     def on_error(self, status_code, data):
         try:
@@ -289,7 +339,8 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
                      (jid TEXT PRIMARY KEY REFERENCES users(jid) ON DELETE CASCADE,
                       want_mentions INTEGER DEFAULT 1,
                       want_dms INTEGER DEFAULT 1,
-                      want_stalks INTEGER DEFAULT 0
+                      want_stalks INTEGER DEFAULT 0,
+                      want_events INTEGER DEFAULT 1
                       )''')
         c.execute('''CREATE TABLE IF NOT EXISTS stalks
                      (jid TEXT REFERENCES users(jid) ON DELETE CASCADE,
@@ -429,7 +480,7 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
                 # Normal mode
                 if msg['body'].startswith('!'):
                     if msg['body'].lower().strip() == '!help':
-                        cursor.execute("SELECT want_mentions, want_dms, want_stalks FROM options WHERE jid=?", (msg['from'].bare,))
+                        cursor.execute("SELECT want_mentions, want_dms, want_stalks, want_events FROM options WHERE jid=?", (msg['from'].bare,))
                         row = cursor.fetchone()
                         if row['want_mentions']:
                             mentions = 'ON'
@@ -443,6 +494,10 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
                             stalks = 'ON'
                         else:
                             stalks = 'OFF'
+                        if row['want_events']:
+                            events = 'ON'
+                        else:
+                            events = 'OFF'
                         replystr = """Chitter: A Twitter to XMPP bot.
 
 Commands:
@@ -450,6 +505,7 @@ Commands:
 !want_mentions   Toggle (non-reply) mentions of you. Currently: %(mentions)s.
 !want_DMs        Toggle Direct Messages. Currently: %(dms)s.
 !want_stalks     Toggle messages from selected follows. Currently: %(stalks)s.
+!want_events     Toggle non-tweet events (new followers, favourites etc). Currently: %(events)s.
 !stalk           Show currently stalked users.
 !stalk {user}    Add a user to be stalked.
 !stalk !{user}   Remove a user from the stalk list.
@@ -462,7 +518,7 @@ Commands:
 !dm {user}       Send a composed direct message.
 !delete {code}   Delete a tweet.         
 {message}        Compose a tweet. I'll tell you how many characters it is.
-""" % {'mentions': mentions, 'dms': dms, 'stalks': stalks}
+""" % {'mentions': mentions, 'dms': dms, 'stalks': stalks, 'events': events}
                         htmlreplystr = """<pre><code>Chitter: A Twitter to XMPP bot.<br />
 <br />
 Commands:<br />
@@ -470,6 +526,7 @@ Commands:<br />
 !want_mentions   Toggle (non-reply) mentions of you. Currently: %(mentions)s.<br />
 !want_DMs        Toggle Direct Messages. Currently: %(dms)s.<br />
 !want_stalks     Toggle messages from selected follows. Currently: %(stalks)s.<br />
+!want_events     Toggle non-tweet events (new followers, favourites etc). Currently: %(events)s.<br />
 !stalk           Show currently stalked users.<br />
 !stalk {user}    Add a user to be stalked.<br />
 !stalk !{user}   Remove a user from the stalk list.<br />
@@ -482,14 +539,15 @@ Commands:<br />
 !dm {user}       Send a composed direct message.<br />
 !delete {code}   Delete a tweet.<br />
 {message}        Compose a tweet. I'll tell you how many characters it is.<br />
-</code></pre>""" % {'mentions': mentions, 'dms': dms, 'stalks': stalks}
+</code></pre>""" % {'mentions': mentions, 'dms': dms, 'stalks': stalks, 'events': events}
                         self.send_message(mto=msg['from'], mbody=replystr, mhtml=htmlreplystr, mtype=msg['type'])
                         
-                    if msg['body'].lower().strip() in ('!want_mentions', '!want_dms', '!want_stalks'):
+                    if msg['body'].lower().strip() in ('!want_mentions', '!want_dms', '!want_stalks', '!want_events'):
                         flag = msg['body'].lower().strip().lstrip('!')
                         neat = {"want_mentions": "Mentions",
                                 "want_dms": "DMs",
-                                "want_stalks": "Stalks"}
+                                "want_stalks": "Stalks",
+                                "want_events": "Events"}
 
                         cursor.execute("UPDATE options SET %(flag)s = NOT(%(flag)s) WHERE jid=?" % {'flag': flag}, (msg['from'].bare,))
                         conn.commit()
@@ -553,18 +611,18 @@ Commands:<br />
                             except TwythonError as e:
                                 logging.warning(e)
                                 self.send_message(mto=msg['from'], mtype=msg['type'], mbody=str(e))
-                            else:
-                                self.composed[msg['from'].bare] = ""
-                                newtweet = ChitterBuffer().get(msgid, msg['from'].bare)
-                                self.send_message(
-                                        mto=msg['from'],
-                                        mbody="%(msgid)s> [SENT]: %(tweet)s" %
-                                            {'msgid': msgid,
-                                             'tweet': newtweet['content']},
-                                        mhtml="<p><tt><b>%(msgid)s</b>&gt; [SENT]</tt>: %(tweet)s</p>" %
-                                            {'msgid': msgid,
-                                             'tweet': newtweet['content']},
-                                        mtype=msg['type'])
+#                            else:
+#                                self.composed[msg['from'].bare] = ""
+#                                newtweet = ChitterBuffer().get(msgid, msg['from'].bare)
+#                                self.send_message(
+#                                        mto=msg['from'],
+#                                        mbody="%(msgid)s> [SENT]: %(tweet)s" %
+#                                            {'msgid': msgid,
+#                                             'tweet': newtweet['content']},
+#                                        mhtml="<p><tt><b>%(msgid)s</b>&gt; [SENT]</tt>: %(tweet)s</p>" %
+#                                            {'msgid': msgid,
+#                                             'tweet': newtweet['content']},
+#                                        mtype=msg['type'])
 
 
                     if msg['body'].lower().strip().startswith('!tweet'):
