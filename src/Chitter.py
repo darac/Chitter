@@ -173,9 +173,55 @@ class ChitterStream(TwythonStreamer):
             self.buff.remove(self.jid, data)
 #        if self.kind == 'stalks':
 #            logging.debug("Possible stalk message")
+        elif 'event' in data:
+            logging.debug("Event %s from @%s to @%s", data['event'], data['source']['screen_name'], data['target']['screen_name'])
+            conn =  sqlite3.connect('/var/local/chitter.db')
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute ("SELECT want_events FROM options WHERE jid=?", (self.jid,))
+            row = cursor.fetchone()
+            if row is None:
+                logging.warning("Ack! Don't know the user %s", self.jid)
+            elif row['want_events']:
+                outmsg = ""
+                outmsghtml = ""
+                # We're not going to send events where the source is the current user
+                if data['event'] == 'favorite' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just favourited your tweet: {[target_object][text]}.".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just favourited your tweet: ".format(data) + Twython.html_for_tweet(data['target_object']) + "</p>"
+                elif data['event'] == 'unfavorite' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just unfavourited your tweet: {[target_object][text]}.".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just unfavourited your tweet: ".format(data) + Twython.html_for_tweet(data['target_object']) + "</p>"
+                elif data['event'] == 'follow' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just followed you.".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just followed you.</p>"
+                elif data['event'] == 'list_member_added' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just added you to the list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just added you to the list \"{[target_object][name]\" ({[target_object][description]})</p>"
+                elif data['event'] == 'list_member_removed' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just removed you from the list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just removed you from the list \"{[target_object][name]\" ({[target_object][description]})</p>"
+                elif data['event'] == 'list_user_subscribed' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just subscribed to your list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just subscribed to your list \"{[target_object][name]\" ({[target_object][description]})</p>"
+                elif data['event'] == 'list_user_unsubscribed' and data['source']['id_str'] != self.twituser['id_str']:
+                    outmsg = "{[source][name]} (@{[source][screen_name]}) just unsubscribed from your list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
+                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just unsubscribed from your list \"{[target_object][name]\" ({[target_object][description]})</p>"
+
+                if outmsg != "":
+                    self.xmpp.send_message(
+                            mto=self.jid,
+                            mbody=outmsg,
+                            mhtml=outmsghhtml,
+                            mtype='normal')
+                else logging.debug ("Not announcing this event (either it's an unknown event, or the source is the user)")
+            else:
+                logging.debug ("%s doesn't want_events")
         elif self.kind == 'dms' and 'direct_message' not in data:
             # Want DMs, but this isn't a DM
             logging.debug("Dropping Message (not a DM)")
+            if 'event' in data:
+                logging.debug("But this was an event")
             return
         elif self.kind == 'dms':
             msgid = self.buff.add(self.jid, data['direct_message'], is_dm=True)
@@ -230,49 +276,8 @@ class ChitterStream(TwythonStreamer):
                             mtype='normal')
             else:
                 logging.debug("Not a stalk")
-        elif 'event' in data:
-            logging.debug("Event %s from @%s to @%s", data['event'], data['source']['screen_name'], data['target']['screen_name'])
-            conn =  sqlite3.connect('/var/local/chitter.db')
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute ("SELECT want_events FROM options WHERE jid=?", (self.jid,))
-            row = cursor.fetchone()
-            if row is None:
-                logging.warning("Ack! Don't know the user %s", self.jid)
-            elif row['want_events']:
-                outmsg = ""
-                outmsghtml = ""
-                # We're not going to send events where the source is the current user
-                if data['event'] == 'favorite' and data['source']['id_str'] != self.twituser['id_str']:
-                    outmsg = "{[source][name]} (@{[source][screen_name]}) just favourited your tweet: {[target_object][text]}.".format(data)
-                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just favourited your tweet: ".format(data) + Twython.html_for_tweet(data['target_object']) + "</p>"
-                elif data['event'] == 'unfavorite' and data['source']['id_str'] != self.twituser['id_str']:
-                    outmsg = "{[source][name]} (@{[source][screen_name]}) just unfavourited your tweet: {[target_object][text]}.".format(data)
-                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just unfavourited your tweet: ".format(data) + Twython.html_for_tweet(data['target_object']) + "</p>"
-                elif data['event'] == 'follow' and data['source']['id_str'] != self.twituser['id_str']:
-                    outmsg = "{[source][name]} (@{[source][screen_name]}) just followed you.".format(data)
-                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just followed you.</p>"
-                elif data['event'] == 'list_member_added' and data['source']['id_str'] != self.twituser['id_str']:
-                    outmsg = "{[source][name]} (@{[source][screen_name]}) just added you to the list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
-                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just added you to the list \"{[target_object][name]\" ({[target_object][description]})</p>"
-                elif data['event'] == 'list_member_removed' and data['source']['id_str'] != self.twituser['id_str']:
-                    outmsg = "{[source][name]} (@{[source][screen_name]}) just removed you from the list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
-                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just removed you from the list \"{[target_object][name]\" ({[target_object][description]})</p>"
-                elif data['event'] == 'list_user_subscribed' and data['source']['id_str'] != self.twituser['id_str']:
-                    outmsg = "{[source][name]} (@{[source][screen_name]}) just subscribed to your list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
-                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just subscribed to your list \"{[target_object][name]\" ({[target_object][description]})</p>"
-                elif data['event'] == 'list_user_unsubscribed' and data['source']['id_str'] != self.twituser['id_str']:
-                    outmsg = "{[source][name]} (@{[source][screen_name]}) just unsubscribed from your list \"{[target_object][name]\" ({[target_object][description]}).".format(data)
-                    outmsghtml = "<p>{[source][name]} (<a href=\"https://twitter.com/{[source][screen_name]}\">@{[source][screen_name]}</a>) just unsubscribed from your list \"{[target_object][name]\" ({[target_object][description]})</p>"
-
-                if outmsg != "":
-                    self.xmpp.send_message(
-                            mto=self.jid,
-                            mbody=outmsg,
-                            mhtml=outmsghhtml,
-                            mtype='normal')
         else:
-            logging.debug("Unknown Streaming message. Keys are %s", ", ".join(data.keys()))
+            logging.info("Unknown Streaming message. Keys are %s", ", ".join(data.keys()))
             
 
 
