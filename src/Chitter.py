@@ -214,7 +214,8 @@ class ChitterStream(TwythonStreamer):
                             mbody=outmsg,
                             mhtml=outmsghhtml,
                             mtype='normal')
-                else logging.debug ("Not announcing this event (either it's an unknown event, or the source is the user)")
+                else:
+                    logging.debug ("Not announcing this event (either it's an unknown event, or the source is the user)")
             else:
                 logging.debug ("%s doesn't want_events")
         elif self.kind == 'dms' and 'direct_message' not in data:
