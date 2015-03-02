@@ -123,6 +123,7 @@ class ChitterThread(Thread):
             if row is None:
                 logging.warning("Ack! Don't know the user %s", self.stream.jid)
             elif row['want_stalks'] and row['want_mentions']:
+                logging.debug ("Listening for stalks and mentions")
                 cursor.execute("SELECT stalk FROM stalks WHERE jid=?", (self.stream.jid,))
                 rows = cursor.fetchall()
                 stalklist = []
@@ -135,9 +136,11 @@ class ChitterThread(Thread):
                     self.stream.statuses.filter(track=user_name, follow=stalkstr)
             elif row['want_mentions']:
                 # Mentions only
+                logging.debug ("Listening for mentions")
                 self.stream.statuses.filter(track=user_name)
             else:
                 # Stalks only
+                logging.debug ("Listening for stalks")
                 cursor.execute("SELECT stalk FROM stalks WHERE jid=?", (self.stream.jid,))
                 rows = cursor.fetchall()
                 stalklist = []
@@ -215,7 +218,7 @@ class ChitterStream(TwythonStreamer):
                             mhtml=outmsghhtml,
                             mtype='normal')
                 else:
-                    logging.debug ("Not announcing this event (either it's an unknown event, or the source is the user)")
+                    logging.debug ("Not announcing this event (either it's an unknown event [%s], or the source is the user [%s])", (data['event'], data['source']['screen_name']))
             else:
                 logging.debug ("%s doesn't want_events")
         elif self.kind == 'dms' and 'direct_message' not in data:
@@ -232,30 +235,42 @@ class ChitterStream(TwythonStreamer):
                     self.xmpp.send_message(
                             mto=self.jid,
                             mbody="{msgid}> [DIRECT TO {dm[recipient][name]} (@{dm[recipient][screen_name]})]: {dm[text]}".format(msgid=msgid, dm=data['direct_message']),
-                            mhtml="<p><tt><b>{msgid}</b>&gt; [DIRECT TO {dm[recipient][name]} (<a href=\"https://twitter.com/{dm[recipient][screen_name]}\">@{dm[recipient][screen_name]}</a>)</tt>: {tweet}</p>".format(msgid=msgid, dm=data['direct_message'], tweet = Twython.html_for_tweet(data['direct_message'])),
+                            mhtml="<p><tt><b>{msgid}</b>&gt; [DIRECT TO {dm[recipient][name]} (<a href=\"https://twitter.com/{dm[recipient][screen_name]}\">@{dm[recipient][screen_name]}</a>)]</tt>: {tweet}</p>".format(msgid=msgid, dm=data['direct_message'], tweet = Twython.html_for_tweet(data['direct_message'])),
                             mtype='normal')
                 else:
                     self.xmpp.send_message(
                             mto=self.jid,
                             mbody="{msgid}> [DIRECT FROM {dm[sender][name]} (@{dm[sender][screen_name]})]: {dm[text]}".format(msgid=msgid, dm=data['direct_message']),
-                            mhtml="<p><tt><b>{msgid}</b>&gt; [DIRECT FROM {dm[sender][name]} (<a href=\"https://twitter.com/{dm[sender][screen_name]}\">@{dm[sender][screen_name]}</a>)</tt>: {tweet}</p>".format(msgid=msgid, dm=data['direct_message'], tweet = Twython.html_for_tweet(data['direct_message'])),
+                            mhtml="<p><tt><b>{msgid}</b>&gt; [DIRECT FROM {dm[sender][name]} (<a href=\"https://twitter.com/{dm[sender][screen_name]}\">@{dm[sender][screen_name]}</a>)]</tt>: {tweet}</p>".format(msgid=msgid, dm=data['direct_message'], tweet = Twython.html_for_tweet(data['direct_message'])),
                             mtype='normal')
         elif 'text' in data:
             logging.debug("Potential Stalk:")
             if 'in_reply_to_user_id_str' in data:
-                logging.debug("In_Reply_To: %s", data['in_reply_to_user_id_str'])
+                if data['in_reply_to_user_id_str'] == self.twituser['id_str']:
+                    logging.debug("In_Reply_To: Me :)")
+                elif data['in_reply_to_user_id_str'] is None:
+                    logging.debug("In_Reply_To: None :)")
+                else:
+                    logging.debug("In_Reply_To: %s :(", data['in_reply_to_screen_name'])
             else:
-                logging.debug("Not a reply")
+                logging.debug("Not a reply :)")
             if 'retweeted_status' in data:
-                logging.debug("Retweet of: %s", data['retweeted_status']['id_str'])
+                if data['retweeted_status']['user']['id_str'] == self.twituser['id_str']:
+                    logging.debug("Retweet of: Me :)")
+                elif data['retweeted_status']['user']['id_str'] == None:
+                    logging.debug("Retweet of: None :)")
+                else:
+                    logging.debug("Retweet of: %s :(", data['retweeted_status']['user']['screen_name'])
             else:
-                logging.debug("Not a retweet")
+                logging.debug("Not a retweet :)")
             if ('in_reply_to_user_id_str' not in data and \
                 'retweeted_status' not in data) or \
                ('in_reply_to_user_id_str' in data and \
-                data['in_reply_to_user_id_str'] == self.twituser['id_str']) or \
+                (data['in_reply_to_user_id_str'] == self.twituser['id_str'] or
+                 data['in_reply_to_user_id_str'] == None)) or \
                ('retweeted_status' in data and \
-                data['retweeted_status']['user']['id_str'] == self.twituser['id_str']):
+                (data['retweeted_status']['user']['id_str'] == self.twituser['id_str'] or
+                 data['retweeted_status']['user']['id_str'] == None)):
                 # * Not a reply -OR-
                 # * Reply to this user -OR-
                 # * Not a retweet -OR-
@@ -673,6 +688,8 @@ Commands:<br />
                             stalkers = []
                             for row in rows:
                                 stalkers.append(row['stalk'])
+                            cursor.execute("SELECT want_stalks FROM options WHERE jid=?", (msg['from'].bare,))
+                            want_stalks = (cursor.fetchone())['want_stalks']
                             if stalkers == []:
                                 self.send_message(mto=msg['from'],
                                                   mtype=msg['type'],
@@ -681,7 +698,10 @@ Commands:<br />
                                 # Stalkers is now a list of ids.
                                 # Convert those to names
                                 screen_names = self.streams[msg['from'].bare]['dms'].stream.twitter.lookup_user(user_id = '%s' % ','.join(str(x) for x in stalkers))
-                                replystr = "You are stalking these followers:\n"
+                                if want_stalks:
+                                    replystr = "You are stalking these followers:\n"
+                                else:
+                                    replystr = "You would stalk these followers (but stalking is OFF):\n"
                                 htmlreplystr = "<p>You are stalking these followers<br /><ul>"
                                 for sn in screen_names:
                                     replystr += "   @%s (%s)\n" % (sn['screen_name'], sn['name'])
@@ -765,7 +785,7 @@ Commands:<br />
                                         mhtml="<p><tt><b>%(msgid)s</b>&gt; [SENT TO @%(target)s]</tt>: %(tweet)s</p>" %
                                         {'msgid': msgid,
                                          'target': tweet_target,
-                                         'tweet': Twython.html_for_tweet(tweet)},
+                                         'tweet': Twython.html_for_tweet(newtweet['content'])},
                                     mtype=msg['type'])
                         except TwythonError as e:
                             logging.warning(e)
@@ -991,7 +1011,10 @@ if __name__ == '__main__':
     if args.verbose:
         loggingformatter = IndentFormatter.IndentFormatter("[%(levelname)s]%(indent)s%(function)s:%(message)s")
     else:
-        loggingformatter = logging.Formatter('%(name)s: %(levelname)s %(message)s')
+        if args.daemonize:
+            loggingformatter = logging.Formatter('chitter: %(name)s: %(levelname)s %(message)s')
+        else:
+            loggingformatter = logging.Formatter('%(name)s: %(levelname)s %(message)s')
     logger = logging.getLogger()
     if args.daemonize:
         handler = logging.handlers.SysLogHandler(address='/dev/log', facility=logging.handlers.SysLogHandler.LOG_DAEMON)
