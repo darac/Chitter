@@ -10,14 +10,18 @@
 # built-ins
 import argparse
 from datetime import datetime, timedelta
+import errno
 import logging
 import logging.handlers
 import sqlite3
 from threading import Thread
 import time
 import unicodedata
+import os
+import os.path
 import sys
 import platform
+import systemd.daemon
 
 if int(platform.python_version_tuple()[0]) < 3:
     raise Exception
@@ -39,10 +43,23 @@ from XMPPOTR.OTRContextManager import PyOTRContextManager
 
 class ChitterBuffer(metaclass=Singleton):
     def __init__(self):
-        self.con = sqlite3.connect(':memory:', check_same_thread = False)
+        cache_dir = '/var/cache/chitter'
+        try:
+            os.makedirs(cache_dir)
+        except OSError as exception:
+            if exception.errno == errno.EACCES:
+                cache_dir = os.path.expanduser('~/.cache/chitter')
+                try:
+                    os.makedirs(cache_dir)
+                except OSError as exception:
+                    if exception.errno != errno.EEXIST:
+                        raise
+            elif exception.errno != errno.EEXIST:
+                raise
+        self.con = sqlite3.connect(os.path.join(cache_dir,'chitter.db'), check_same_thread = False)
         self.con.row_factory = sqlite3.Row
         self.cur = self.con.cursor()
-        self.cur.execute('''CREATE TABLE tweets
+        self.cur.execute('''CREATE TABLE IF NOT EXISTS tweets
                          (id INTEGER PRIMARY KEY,
                           id_str TEXT,
                           user_id TEXT,
@@ -218,7 +235,7 @@ class ChitterStream(TwythonStreamer):
                             mhtml=outmsghhtml,
                             mtype='normal')
                 else:
-                    logging.debug ("Not announcing this event (either it's an unknown event [%s], or the source is the user [%s])", (data['event'], data['source']['screen_name']))
+                    logging.debug ("Not announcing this event (either it's an unknown event [%s], or the source is the user [%s])", data['event'], data['source']['screen_name'])
             else:
                 logging.debug ("%s doesn't want_events")
         elif self.kind == 'dms' and 'direct_message' not in data:
@@ -245,32 +262,35 @@ class ChitterStream(TwythonStreamer):
                             mtype='normal')
         elif 'text' in data:
             logging.debug("Potential Stalk:")
+            stalk_reply = False
+            stalk_retweet = False
             if 'in_reply_to_user_id_str' in data:
                 if data['in_reply_to_user_id_str'] == self.twituser['id_str']:
                     logging.debug("In_Reply_To: Me :)")
+                    stalk_reply = True
                 elif data['in_reply_to_user_id_str'] is None:
                     logging.debug("In_Reply_To: None :)")
+                    stalk_reply = True
                 else:
                     logging.debug("In_Reply_To: %s :(", data['in_reply_to_screen_name'])
             else:
                 logging.debug("Not a reply :)")
+                stalk_reply = True
             if 'retweeted_status' in data:
                 if data['retweeted_status']['user']['id_str'] == self.twituser['id_str']:
                     logging.debug("Retweet of: Me :)")
+                    stalk_retweet = True
                 elif data['retweeted_status']['user']['id_str'] == None:
                     logging.debug("Retweet of: None :)")
+                    stalk_retweet = True
                 else:
                     logging.debug("Retweet of: %s :(", data['retweeted_status']['user']['screen_name'])
             else:
                 logging.debug("Not a retweet :)")
+                stalk_retweet = True
             if ('in_reply_to_user_id_str' not in data and \
                 'retweeted_status' not in data) or \
-               ('in_reply_to_user_id_str' in data and \
-                (data['in_reply_to_user_id_str'] == self.twituser['id_str'] or
-                 data['in_reply_to_user_id_str'] == None)) or \
-               ('retweeted_status' in data and \
-                (data['retweeted_status']['user']['id_str'] == self.twituser['id_str'] or
-                 data['retweeted_status']['user']['id_str'] == None)):
+                (stalk_reply == True and stalk_retweet == True):
                 # * Not a reply -OR-
                 # * Reply to this user -OR-
                 # * Not a retweet -OR-
@@ -319,6 +339,7 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
 
     def __init__(self, jid, password):
         ClientXMPP.__init__(self, jid, password)
+        systemd.daemon.notify("STATUS=Setting up...")
         
         # The session_start event will be triggered when
         # the bot establishes its connection with the server
@@ -400,6 +421,7 @@ class ChitterBot(ClientXMPP, metaclass=Singleton):
                 self.StartChitterThreads(row['jid'])
 
         self.send_presence(pstatus="Ready. Send '!help' for help", pshow='chat')
+        systemd.daemon.notify("READY=1")
         conn.close()
 
     def subscribe(self, presence):
@@ -563,7 +585,7 @@ Commands:<br />
 </code></pre>""" % {'mentions': mentions, 'dms': dms, 'stalks': stalks, 'events': events}
                         self.send_message(mto=msg['from'], mbody=replystr, mhtml=htmlreplystr, mtype=msg['type'])
                         
-                    if msg['body'].lower().strip() in ('!want_mentions', '!want_dms', '!want_stalks', '!want_events'):
+                    elif msg['body'].lower().strip() in ('!want_mentions', '!want_dms', '!want_stalks', '!want_events'):
                         flag = msg['body'].lower().strip().lstrip('!')
                         neat = {"want_mentions": "Mentions",
                                 "want_dms": "DMs",
@@ -580,7 +602,7 @@ Commands:<br />
                         else:
                             msg.reply(neat[flag] + " are now OFF").send()
 
-                    if msg['body'].lower().strip().startswith('!delete'):
+                    elif msg['body'].lower().strip().startswith('!delete'):
                         cmd_parts = msg['body'].lower().split(maxsplit=1)
                         tweet = ChitterBuffer().get(cmd_parts[1], msg['from'].bare)
                         if tweet is None:
@@ -593,7 +615,7 @@ Commands:<br />
 
 
 
-                    if msg['body'].lower().strip().startswith('!reply'):
+                    elif msg['body'].lower().strip().startswith('!reply'):
                         cmd_parts = msg['body'].split(maxsplit=2)
                         tweet = ChitterBuffer().get(cmd_parts[1], msg['from'].bare)
                         if tweet is None:
@@ -646,7 +668,7 @@ Commands:<br />
 #                                        mtype=msg['type'])
 
 
-                    if msg['body'].lower().strip().startswith('!tweet'):
+                    elif msg['body'].lower().strip().startswith('!tweet'):
                         cmd_parts = msg['body'].split(maxsplit=1)
                         if 1 > len(cmd_parts)-1 and self.composed[msg['from'].bare] != "":
                             # No tweet body, but there is a composed
@@ -679,7 +701,7 @@ Commands:<br />
                             logging.warning(e)
                             self.send_message(mto=msg['from'], mtype=msg['type'], mbody=e)
 
-                    if msg['body'].lower().strip().startswith('!stalk'):
+                    elif msg['body'].lower().strip().startswith('!stalk'):
                         cmd_parts = msg['body'].split(maxsplit=2)
                         if 1 > len(cmd_parts)-1:
                             # No options
@@ -747,7 +769,7 @@ Commands:<br />
 
 
 
-                    if msg['body'].lower().strip().startswith('!dm'):
+                    elif msg['body'].lower().strip().startswith('!dm'):
                         cmd_parts = msg['body'].split(maxsplit=2)
                         if 1 > len(cmd_parts)-1:
                             # No options
@@ -781,15 +803,22 @@ Commands:<br />
                                     mbody="%(msgid)s> [SENT TO @%(target)s]: %(tweet)s" %
                                         {'msgid': msgid,
                                          'target': tweet_target,
-                                         'tweet': newtweet['content']},
+                                         'tweet': newtweet['direct_message']},
                                         mhtml="<p><tt><b>%(msgid)s</b>&gt; [SENT TO @%(target)s]</tt>: %(tweet)s</p>" %
                                         {'msgid': msgid,
                                          'target': tweet_target,
-                                         'tweet': Twython.html_for_tweet(newtweet['content'])},
+                                         'tweet': Twython.html_for_tweet(newtweet['direct_message'])},
                                     mtype=msg['type'])
                         except TwythonError as e:
                             logging.warning(e)
                             self.send_message(mto=msg['from'], mtype=msg['type'], mbody=e)
+
+
+                    else:
+                        self.send_message(
+                                mto=msg['from'],
+                                mbody="Sorry, I don't know that command. Try !help.",
+                                mtype=msg['type'])
 
 
                 else:

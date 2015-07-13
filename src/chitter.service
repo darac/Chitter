@@ -1,0 +1,10 @@
+[Unit]
+Description=Twitter to XMPP bot
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/home/darac/chitter/src/Chitter.py -d
+
+[Install]
+WantedBy=multi-user.target
